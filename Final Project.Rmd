@@ -1,0 +1,359 @@
+---
+title: "STA 518 Final Project"
+author: "Joel Smith"
+date: "12/10/2018"
+output: word_document
+---
+
+```{r include=FALSE}
+library(tidyverse)
+library(broom)
+library(ggrepel)
+library(magrittr)
+
+# stop scientific notation
+options(scipen = 999)
+
+mydata = read_csv("finalprojectdata.csv")
+```
+
+#### 1. Make one appropriate exploratory graph of the response variable against each explanatory variable (for a total of 6 graphs) and note any interesting or troublesome features. If any transformation of the response variable is needed, now would be the time to implement it. If you implement a transformation, you should graphically confirm that it was reasonably successful.
+
+```{r echo=FALSE}
+ggplot(mydata, aes(distance, debt)) +
+  geom_point() +
+  ggtitle("Distance from Hometown to Allendale vs Student Debt") +
+  xlab("Distance (miles)") + 
+  ylab("Debt ($)") +
+  theme(plot.title = element_text(size = 12))
+
+ggplot(mydata, aes(scholarship, debt)) +
+  geom_point() +
+  ggtitle("Financial Support via Scholarship vs Student Debt") +
+  xlab("Financial Support in Average Dollars per Year ($)") + 
+  ylab("Debt ($)")
+
+ggplot(mydata, aes(parents, debt)) +
+  geom_point() +
+  ggtitle("Percent of Cost of Degree Paid by Parents vs Student Debt") +
+  xlab("Percent of Cost of Degree Paid by Parents (max of 50%)") + 
+  ylab("Debt ($)") +
+  theme(plot.title = element_text(size = 11))
+
+ggplot(mydata, aes(car, debt)) +
+  geom_point() +
+  ggtitle("Age of Car vs Student Debt") +
+  xlab("Age of Car (Years)") + 
+  ylab("Debt ($)")
+
+ggplot(mydata, aes(housing, debt)) +
+  geom_point() +
+  ggtitle("Type of Housing vs Student Debt") +
+  xlab("Type of Housing") + 
+  ylab("Debt ($)")
+
+ggplot(mydata, aes(major, debt)) +
+  geom_point() +
+  ggtitle("Major vs Student Debt") +
+  xlab("Major") + 
+  ylab("Debt ($)")
+```
+
+There appears to be an outlier on the debt vs. distance plot, and one on the debt vs. scholarship plot as well. 
+
+The plot of distance and debt shows what is not quite a linear relationship, so a square root transformation of distance was completed. The plot below shows how the transformed relationship is much more linear.
+
+```{r echo=FALSE}
+ggplot(mydata, aes(sqrt(distance), debt)) +
+  geom_point() +
+  ggtitle("Square Root of Distance from Hometown to Allendale vs Student Debt") +
+  xlab("Square Root of Distance (miles)") + 
+  ylab("Debt ($)") +
+  theme(plot.title = element_text(size = 10))
+
+# create distanceSQRT variable to include in the following analysis
+mydata %>%
+  mutate(distSQRT = sqrt(distance)) %>%
+  select(-distance) -> mydata
+```
+
+#### 2. Manually create dummy (indicator) variables for categorical explanatory variables. You should use these dummy variables in the rest of the project, in place of the original categorical explanatory variables. You must use the reference group listed in the description of the data in the creation of the dummy variables. You should give an explanation of how you created your dummy variables, and why you had the particular number of them that you did, as if you were explaining to one of your classmates.
+
+
+```{r}
+# create housing dummy variable - "off campus" as reference
+mydata %>%
+  mutate(dhous = ifelse(housing == "on campus", 1, 0)) %>%
+  select(-housing) -> mydata
+
+# create major dummy variable - "other" as reference
+mydata %>%
+  mutate(dSTEM = ifelse(major == "STEM", 1, 0),
+         dbusiness = ifelse(major == "business", 1, 0)) %>%
+  select(-major) -> mydata
+```
+
+The code above creates dummy, or indicator, variables for the categorical variables housing and major. For housing, which has two levels, one dummy variable is needed, as the levels of it will explain the levels of housing. The dummy variable _dhous_ is set to 1 when housing is "on campus" and 0 when housing is "off campus." This makes "off campus" the reference group. 
+
+The variable major has three levels, so we need two dummy variables. The dummy variable _dSTEM_ is set to 1 when major is "STEM" and 0 otherwise. The dummy variable _dbusiness_ is set to 1 when major is "business" and 0 otherwise. This makes "other" the reference group, when _dSTEM_ and _dbusiness_ are both 0. 
+
+
+#### 3. Write a function to implement a best subsets approach to model selection (allowing for any number of explanatory variables, which would include all dummy variables and none of the original categorical variables, because they are replaced by the dummy variables), using a linear model, where r-square is the criterion you will use to pick the best model. You may assume that the data will always have columns in the order Y, X1, X2, ..., Xp (where Y is the response variable), and that the data are always “clean”. The only input to the function should be the data set.
+
+```{r include=FALSE}
+# rename scholarship to sship for formula length reasons
+mydata %>%
+  rename(sship = scholarship) -> mydata
+
+# put response variable (debt) as the first in the dataset for function
+mydata = mydata[,c(4, 1, 2, 3, 5, 6, 7, 8)]
+```
+
+
+```{r echo=FALSE}
+modelSelect = function(x) {
+  
+  # grab response variable
+  response = colnames(x)[1]
+  
+  # initialize iteration number
+  modelnum = 0
+  
+  # initialize model summary tibble
+  modelsum = tibble(modelnum = numeric(2^(ncol(x)-1)-1),
+                    variables = list(0),
+                    frm = "NULL", 
+                    r2 = 0,
+                    output = list(0),
+                    resids = list(0),
+                    fitvals = list(0),
+                    varnames = list(0),
+                    indvarcount = numeric(2^(ncol(x)-1)-1),
+                    explanatoryvars = list(0),
+                    maxr2 = "NULL")
+  
+  # for loop that loops through each combination of predictor variables and creates a model for each
+  for(i in 2:length(x)){
+    
+    # find all combinations of predictor variables for i-1 explanatory variables
+    combs = combn(colnames(x)[-1], i-1)
+    
+    # loop through each combination of predictor variables in the columns
+    for(j in 1:ncol(combs)){
+      
+      # create the formula with the given variables
+      fm = as.formula(paste(colnames(x)[1], paste(combs[,j], collapse = "+"), sep = "~"))
+      
+      # increment the model number
+      modelnum = modelnum + 1
+      
+      # create the model using the formula created above
+      model = lm(fm, data = x)
+      
+      # create table with model information - not to be output
+      modelsum$modelnum[[modelnum]] = modelnum
+      modelsum$variables[[modelnum]] = as.list(x[c(response, combs[,j])])
+      modelsum$frm[[modelnum]] = paste(format(fm))
+      modelsum$r2[[modelnum]] = glance(model)[[1]]
+      modelsum$output[[modelnum]] = summary(model)
+      modelsum$resids[[modelnum]] = as.list(model$residuals)
+      modelsum$fitvals[[modelnum]] = as.list(fitted(model))
+      modelsum$varnames[[modelnum]] = names(modelsum$variables[[modelnum]])
+      modelsum$indvarcount[[modelnum]] = length(modelsum$varnames[[modelnum]]) - 1
+      modelsum$explanatoryvars[[modelnum]] = modelsum$varnames[[modelnum]][-1]
+      modelsum$explanatoryvars[[modelnum]] = paste(modelsum$explanatoryvars[[modelnum]], collapse = " ")
+      modelsum$explanatoryvarschar = as.character(modelsum$explanatoryvars)    
+    }
+  }
+  # flag highest r2 for each number of independent variables
+  modelsum %>%
+    group_by(indvarcount) %>%
+    mutate(maxr2 = ifelse(r2 == max(r2), 1, 0)) -> modelsum
+  
+  # result to print
+  result = modelsum[c(1, 12, 4)]
+  nms = c("ModelNumber", "ExplanatoryVariables","Rsquared")
+  names(result) = nms
+
+  # output plot
+  gg = ggplot(modelsum, aes(indvarcount, r2)) +
+        geom_point() +
+        geom_point(size = 3, shape = 1, data = subset(modelsum, maxr2 == 1), color = "red3") +
+        ggrepel::geom_label_repel(aes(label = modelnum), 
+                                  color = "navyblue",
+                                  data = subset(modelsum, maxr2 == 1), 
+                                  hjust = 0) +
+        ggtitle("Number of Independent Variables vs R-squared") +
+        xlab("Number of Independent Variables") +
+        ylab(quote(R ^ 2))
+   
+   # print result tibble and ggplot
+   print(result)
+   print(gg)
+}
+```
+
+The function _modelSelect_ takes a dataset with the first variable being the response. It first initializes an empty tibble to be filled as it loops over and creates a model for each combination of explanatory variables. Within this table, the highest value of R^2^ for each number of explanatory variables is flagged. The output tibble is created from a subset of the tibble inside the function, followed by a plot produced by ggplot. These are then both printed from the function.
+
+
+#### 4. Choose the best model for the data set called finalprojectdata.csv, based on R^2^ by applying your function in the previous part. In other words, you want to balance having higher values of R^2^, against having an unnecessarily complicated model. Put another way, don’t pick a model that is more complicated (more explanatory variables in the model) if there is not “significant” gain in R^2^, relative to simpler models. You can decide what a “significant” gain is, but you should clearly explain what that is and how you used it. Be sure to write the equation of your final model using the variable names.
+
+```{r echo=FALSE}
+# call the modelSelect function with mydata
+# it appears that model 30 is the best balance of R2 and simplicity
+models = modelSelect(mydata)$data
+
+# grab models with highest R2 - based on plot
+models %>%
+  # ungroup() %>%
+  filter(modelnum %in% c(1, 10, 30, 70, 107, 124, 127)) %>%
+  select(modelnum, r2, frm)
+# the difference in r2 from 7 expl vars to 3 is only 0.0072786
+
+# print model coefficients
+# intercept
+models %>%
+  ungroup() %>%
+  filter(modelnum == 30) %>%
+  select(output) %>%
+  unlist() %>%
+  extract2(203) 
+
+# scholarship
+models %>%
+  ungroup() %>%
+  filter(modelnum == 30) %>%
+  select(output) %>%
+  unlist() %>%
+  extract2(204)
+
+# parents
+models %>%
+  ungroup() %>%
+  filter(modelnum == 30) %>%
+  select(output) %>%
+  unlist() %>%
+  extract2(205) 
+
+# sqrt(distance)
+models %>%
+  ungroup() %>%
+  filter(modelnum == 30) %>%
+  select(output) %>%
+  unlist() %>%
+  extract2(206) 
+```
+
+The first table contains the model number, the list of explanatory variables in that model, and the R^2^ for that model.
+
+Looking at the plot we can see that model 30 with three explanatory variables has a fairly high R^2^ value which doesn't increase much as the number of explanatory variables increases. Model 127 has the highest R^2^ value, but it also is the most complex model, as it includes every explanatory variable. The difference in R^2^ between models 127 and 30 is only 0.0073. This difference is small enough that I feel model 30 is the best balance between a high R^2^ value and model complexity. 
+
+The second table contains the model number, R^2^, and the formula for the model that has the highest R^2^ for each number of independent variables.
+
+The four numbers printed after the second table are the coefficients for the terms intercept, scholarship, parents, and $\sqrt{distance}$, respectively, in model 30.
+
+Therefore, the model is:   
+
+$\hat{Debt} = 34184.24 - 1.55(Scholarship) - 21319.31(Parents) + 801.35($$\sqrt{Distance}$)
+
+
+#### 5. Examine the residuals from the model that you chose as your best model. Note any interesting or troublesome features. Normality of residuals is not critical since we did not do any statistical inference. However, outliers, constant variance (homoscedasticity), non-random patterns, etc. are appropriate to look for.
+
+```{r echo=FALSE}
+# put residuals into data frame and rename the column
+resids = as.data.frame(t(as.data.frame(models$resids[[30]])))
+names(resids) = "resids"
+
+# plot distribution of residuals
+ggplot(resids, aes(resids)) +
+  geom_histogram(bins = 50) +
+  ggtitle('Distribution of Residuals') +
+  xlab('Residuals') +
+  ylab('Count')
+
+
+```
+
+The majority of the residuals look normally distributed, although there is one point that has a very large residual. This is not an issue since we are not making statistical inference. 
+
+```{r echo=FALSE}
+# put fitted values into data frame and change the name 
+fittedvals = as.data.frame(t(as.data.frame(models$fitvals[[30]])))
+names(fittedvals) = "fitvals"
+
+# combine fitted values and residuals for the next plot
+fittedvals = cbind(fittedvals, resids)
+
+# plot fitted values and residuals
+ggplot(fittedvals, aes(fitvals, resids)) +
+  geom_point() +
+  ggtitle('Fitted Values vs Residuals') +
+  xlab('Fitted Values') +
+  ylab('Residuals')
+```
+
+However, that same point is an outlier on the fitted values vs residuals plot. Other than this point, the residuals look relatively equally dispersed about zero and their spread is constant as the fitted values increase. The points with fitted values between 10,000 and 20,000 do tend to have negative residuals. If this study were to go further and involve statistical inference, I would remove the outlying point and rerun the model. 
+
+#### 6. For the model with only scholarship, parents, and housing in the model, fit a single model that also contains (two-way) interaction terms for housing and scholarship, and for scholarship and parents, i.e. it has 5 terms in the model. Include appropriate graphics looking at residuals. Interpret the slopes of these two interaction terms in context and illustrate them with graphics.
+
+```{r echo=FALSE}
+# create the model
+model6 = lm(debt ~ sship + parents + dhous + sship:dhous + sship:parents, data = mydata)
+
+# print summary for the model
+summary(model6)
+
+# distribution of residuals
+ggplot(model6, aes(model6$residuals)) +
+  geom_histogram(bins = 30) +
+  ggtitle("Distribution of Residuals") +
+  xlab("Residual") +
+  ylab("Count")
+
+# fitted values vs residuals
+ggplot(model6, aes(model6$fitted.values, model6$residuals)) +
+  geom_point() +
+  ggtitle("Fitted Values vs Residuals") +
+  xlab("Fitted Values") +
+  ylab("Residuals")
+```
+
+The residuals for this model look normally distributed, with a couple of points with large residuals. There is no noticeable pattern to the residuals vs. the fitted values, as they seem to be evenly scattered about zero. There is still the one point that is an outlier. 
+
+The equation for the model is:
+
+$\hat{Debt} = 42102.52 - 1.71(Scholarship) - 28272.99(Parents) + 3464.56(dhous) - 0.51(Scholarship:dhous) + 0.93(Scholarship:Parents)$
+
+The slope for _Scholarship:dhous_ is -0.51. This means that for students who live off campus (dhous = 0), the effect of financial support per year from a Scholarship is -1.71 - 0.51(0) = -1.71, and for students who live on campus (dhous = 1), the effect of financial support per year from a Scholarship is -1.71 - 0.51(1) = -2.22. So a student who lives on campus is expected to have more debt. The effect of housing type for students who live on campus is 3464.56(1) - 0.51(1) = 3464.05. This means that for students who have the same amount of financial support per year from scholarships, the student who lives on campus is expected to have $3464.05 more debt. The first plot below shows how an on campus living situation has a steeper negative slope. The fact that the lines intersect is evidence that an interaction is present. For students without a scholarship, those who live on campus are expected to have more debt. However, as the amount of scholarship increases, students who live off campus are expected to have more debt. 
+
+The slope for _Scholarship:Parents_ is 0.93. This means that for a constant amount of financial support from scholarships per year, an increase of 1% of the total cost of bachelor's degree paid by the student's parents results in an expected -1.71 + 0.93 = -0.78, or $0.78 less debt. Alternatively, for a constant percentage of the bachelor's degree paid by the student's parents and a $1 increase in scholarship, the expected debt is then -28272.99 + 0.93 = -28272.06, or $28,272.06 less debt. The plot below of the interaction between scholarship and parents groups values of the parents variables. The ranges are 0 to 0.180, 0.181 to 0.330, and 0.331 to 0.495. The lines for these groups are not parallel, suggesting an interaction between parents and scholarship.  
+
+However, neither of the interaction terms are significant, so statistical inference made from this analysis is not recommended. This means that there is not significant evidence that the slope for either interaction term is not equal to zero. 
+
+
+```{r echo=FALSE}
+# interaction plot of scholarship and housing with lines for each slope
+ggplot(mydata, aes(sship, debt, color = factor(dhous))) +
+  geom_point(color = "grey") +
+  geom_smooth(method = lm, se = F) +
+  ggtitle("Interaction Plot of Scholarship and Housing") +
+  xlab("Scholarship") +
+  ylab("Debt") +
+  labs(colour = "Housing") +
+  scale_color_manual(labels = c("Off campus", "On campus"),values = c("#F8766D", "#00BFC4"))
+```
+
+```{r echo=FALSE}
+# interaction plot of scholarship and parents with lines for different groupings of parents
+ggplot(mydata %>%
+         mutate(parentgroup = ifelse(parents < 0.18, "0 to 0.180",
+                                     ifelse(parents < 0.33, "0.181 to 0.330", "0.331 to 0.495"))),
+       aes(sship, debt, color = factor(parentgroup))) +
+  geom_point(color = "grey") +
+  geom_smooth(method = lm, se = F) +
+  ggtitle("Interaction Plot of Scholarship and Parents") +
+  xlab("Scholarship") +
+  ylab("Debt") +
+  labs(colour = "Parents") 
+```
+
